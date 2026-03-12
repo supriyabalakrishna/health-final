@@ -7,6 +7,12 @@ const PORT = 4000;
 app.use(cors());
 app.use(express.json());
 
+const OpenAI = require('openai');
+
+const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+});
+
 // In-memory users & records storage
 let users = []; // [{ name, email, username, password }]
 let patientRecords = {}; // { username: { medicines: [], vitals: [], history: [], reminders: [], caregiver: "" } }
@@ -96,73 +102,99 @@ app.get('/api/history/:username', (req, res) => {
   res.json({ history: [...medicines, ...vitals, ...reminders] });
 });
 
-// ---- MEAL PLANNER: 1000+ dishes, 5 random ----
-app.post('/api/mealplanner/generate', (req, res) => {
+// ---- AI HEALTH INSIGHTS ----
+app.post('/api/ai/insights', async (req, res) => {
+  const { username, vitals, history } = req.body;
+  
+  if (!openai.apiKey) {
+    return res.json({ advice: ["AI insights are currently unavailable (Missing API Key)."] });
+  }
+
+  try {
+    const prompt = `You are a helpful health assistant. Based on these patient vitals: ${JSON.stringify(vitals)} and recent health history: ${JSON.stringify(history)}, provide 3 concise, actionable health tips. 
+    IMPORTANT: Start with a medical disclaimer. Be supportive but professional. Return only the tips as a JSON array of strings.`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [{ role: "system", content: "You are a professional medical assistant." }, { role: "user", content: prompt }],
+      response_format: { type: "json_object" }
+    });
+
+    const result = JSON.parse(completion.choices[0].message.content);
+    res.json({ advice: result.tips || result.advice || [] });
+  } catch (error) {
+    console.error("AI Insights Error:", error);
+    res.status(500).json({ success: false, message: "Failed to generate AI insights." });
+  }
+});
+
+// ---- AI SYMPTOM CHECKER ----
+app.post('/api/ai/symptom-check', async (req, res) => {
+  const { symptoms } = req.body;
+
+  if (!openai.apiKey) {
+    return res.json({ analysis: "Symptom checker is currently unavailable." });
+  }
+
+  try {
+    const prompt = `A user is reporting these symptoms: "${symptoms}". 
+    1. Provide a brief analysis of potential causes.
+    2. Suggest next steps (e.g., monitor, see a doctor).
+    3. CRITICAL: If symptoms sound like an emergency (chest pain, severe bleeding, etc.), state clearly that they should seek IMMEDIATE emergency care.
+    Return as a concise summary.`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [{ role: "system", content: "You are a professional medical triage assistant. You provide information, not a diagnosis." }, { role: "user", content: prompt }],
+    });
+
+    res.json({ analysis: completion.choices[0].message.content });
+  } catch (error) {
+    console.error("AI Symptom Check Error:", error);
+    res.status(500).json({ success: false, message: "Failed to check symptoms." });
+  }
+});
+
+// ---- MEAL PLANNER: AI Powered ----
+app.post('/api/mealplanner/generate', async (req, res) => {
   const { caloriesGoal = 1200, vegetarian, bloodSugarBefore = 0, bloodSugarAfter = 0, systolic = 0, diastolic = 0 } = req.body;
   const date = new Date().toLocaleDateString();
 
-  // 1000+ dishes: demo with realistic names and auto-generated filler
-  const baseVegIndian = [
-    "Poha", "Aloo Paratha", "Rajma Rice", "Chole Bhature", "Paneer Tikka",
-    "Dhokla", "Idli", "Sambar Rice", "Baingan Bharta", "Dal Makhani",
-    ...Array.from({length: 90}, (_,i)=>`Veg Indian Dish ${i+1}`)
-  ];
-  const baseNonVegIndian = [
-    "Chicken Curry", "Egg Bhurji", "Mutton Biryani", "Fish Fry", "Egg Curry",
-    ...Array.from({length: 90}, (_,i)=>`NonVeg Indian Dish ${i+1}`)
-  ];
-  const baseVegWestern = [
-    "Caesar Salad", "Vegetarian Pizza", "Veggie Burger", "Fettuccine Alfredo", "Falafel Bowl",
-    "Grilled Cheese", "Veggie Wrap", "Tomato Soup", "Quinoa Salad", "Eggplant Parmesan",
-    ...Array.from({length: 410}, (_,i)=>`Veg Western Dish ${i+1}`)
-  ];
-  const baseNonVegWestern = [
-    "Chicken Sandwich", "Grilled Salmon", "Beef Steak", "Chicken Alfredo", "Shrimp Tacos",
-    "Ham Omelette", "Turkey Wrap", "Egg Muffin", "Fish & Chips", "Chicken Caesar Salad",
-    ...Array.from({length: 410}, (_,i)=>`NonVeg Western Dish ${i+1}`)
-  ];
-
-  let pool = [];
-  if (vegetarian) {
-    pool = baseVegIndian.concat(baseVegWestern); // 500+ veg
-  } else {
-    pool = baseVegIndian.concat(baseVegWestern, baseNonVegIndian, baseNonVegWestern); // 1000+ total
+  if (!openai.apiKey) {
+    // Fallback to old logic if no API key
+    return res.json({ plan: { advice: ["AI Meal Planning unavailable. Showing standard suggestions."], meals: [{name: "Oatmeal", description: "Healthy Breakfast", calories: 300, date}] } });
   }
 
-  // Pick 5 random, no repeats
-  function pick(pool, count) {
-    const arr = [];
-    const clone = [...pool];
-    for(let i=0; i<count && clone.length > 0; i++) {
-      const idx = Math.floor(Math.random() * clone.length);
-      arr.push(clone.splice(idx,1)[0]);
-    }
-    return arr;
+  try {
+    const prompt = `Generate a 1-day meal plan (5 meals: Breakfast, Lunch, Snack, Dinner, Anytime) for a user with: 
+    - Calorie Goal: ${caloriesGoal}
+    - Vegetarian: ${vegetarian}
+    - Recent BP: ${systolic}/${diastolic}
+    - Recent Blood Sugar: ${bloodSugarBefore}/${bloodSugarAfter}
+    
+    Return a JSON object with:
+    1. "advice": Array of 2-3 specific nutritional tips based on their data.
+    2. "meals": Array of 5 objects each with "name", "description", "calories".
+    
+    Make it delicious and medically appropriate.`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [{ role: "system", content: "You are a professional nutritionist." }, { role: "user", content: prompt }],
+      response_format: { type: "json_object" }
+    });
+
+    const result = JSON.parse(completion.choices[0].message.content);
+    res.json({
+      plan: {
+        advice: result.advice || [],
+        meals: (result.meals || []).map(m => ({ ...m, date }))
+      }
+    });
+  } catch (error) {
+    console.error("AI Meal Planner Error:", error);
+    res.status(500).json({ success: false, message: "Failed to generate meal plan." });
   }
-
-  const mealTypes = ["Breakfast", "Lunch", "Snack", "Dinner", "Anytime"];
-  const perMeal = Math.round(caloriesGoal / 5);
-
-  const picked = pick(pool, 5).map((name, i) => ({
-    name,
-    description: `${mealTypes[i]} suggestion`,
-    calories: perMeal,
-    date
-  }));
-
-  let advice = [`Date: ${date}`];
-  if (bloodSugarBefore > 120 || bloodSugarAfter > 180) advice.push("High blood sugar: Prefer whole grains, avoid sugary/fried foods.");
-  if (bloodSugarBefore < 50 || bloodSugarAfter < 70) advice.push("Low blood sugar: Include healthy carbs like fruit, moderate sweet.");
-  if (systolic > 140 || diastolic > 90) advice.push("High blood pressure: Use less salt, avoid processed foods, add fruit/veggies.");
-  if (caloriesGoal < 1200) advice.push("Low calorie goal: Add nutrient dense meals, nuts, legumes.");
-  if (advice.length === 1) advice.push("You are in good balance, keep healthy habits!");
-
-  res.json({
-    plan: {
-      advice,
-      meals: picked
-    }
-  });
 });
 
 // Health check

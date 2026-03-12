@@ -3,6 +3,7 @@ import Card from '../components/Card';
 import api from '../api/axios';
 import { motion } from 'framer-motion';
 import { FaWater, FaHeartbeat, FaPills, FaQuoteLeft, FaSmileBeam } from 'react-icons/fa';
+import AIInsights from '../components/AIInsights';
 
 const quotes = [
   "Take care of your body. It’s the only place you have to live.",
@@ -104,6 +105,10 @@ export default function Dashboard() {
             <span className="text-xs mt-3 text-gray-500">Manage medicines in the Medications page.</span>
           </Card>
         </motion.div>
+      </div>
+
+      <div className="w-full mt-8 max-w-6xl">
+        <AIInsights vitals={latest} history={[]} />
       </div>
     </motion.div>
   );

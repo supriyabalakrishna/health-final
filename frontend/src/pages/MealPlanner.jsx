@@ -18,9 +18,17 @@ export default function MealPlanner() {
     setMsg('');
     setPlan(null);
     try {
+      const user = JSON.parse(localStorage.getItem('healthsync_user') || '{}');
+      const vitalsRes = await api.get(`/vitals/${user.username}`);
+      const latest = vitalsRes.data.vitals?.length > 0 ? vitalsRes.data.vitals[vitalsRes.data.vitals.length - 1] : {};
+
       const res = await api.post('/mealplanner/generate', {
         caloriesGoal,
         vegetarian,
+        bloodSugarBefore: latest.bloodSugarBefore || 0,
+        bloodSugarAfter: latest.bloodSugarAfter || 0,
+        systolic: latest.systolic || 0,
+        diastolic: latest.diastolic || 0
       });
       setPlan(res.data.plan);
     } catch (err) {
